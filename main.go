@@ -16,7 +16,7 @@ const EXTENDED_64 = 127
 type OpCode int
 const (
 	OpCodeContinuation OpCode = iota
-	OpCodeText
+	OpCodeText 
 	OpCodeBinary
 
 	OpCodeReserved3
@@ -142,6 +142,10 @@ func (frame WSFrame) Print() {
 	fmt.Println("---  MESSAGE END  ---")
 }
 
+func (frame WSFrame) PrintNetwork() {
+	fmt.Printf("%s - %d bytes\n", frame.opcode, frame.size)
+}
+
 func (frame WSFrame) UnmaskPayload() []byte {
 	data := make([]byte, frame.size)
 	copy(data, frame.payload)
@@ -149,6 +153,30 @@ func (frame WSFrame) UnmaskPayload() []byte {
 	 	data[i] ^= frame.mask[i % 4]
 	}
 	return data;
+}
+
+func (frame WSFrame) ToSendableBytes() []byte {
+	b := []byte{}
+
+	// FIN + opcode
+	if frame.fin {
+		b = append(b, (0b1000 << 4) | byte(frame.opcode))
+	} else {
+		b = append(b, (0b0000 << 4) | byte(frame.opcode))
+	}
+
+	// TODO: Handle over 125 size
+	if frame.size >= EXTENDED_16 {
+		panic("TOO BIG")
+	}
+
+	// payload size
+	b = append(b, byte(frame.size))
+
+	// Unmasked payload
+	b = append(b, frame.UnmaskPayload()...)
+
+	return b
 }
 
 func extractFrame(conn net.Conn) (*WSFrame, error) {
@@ -160,7 +188,7 @@ func extractFrame(conn net.Conn) (*WSFrame, error) {
 		return nil, err
 	}
 
-	first_byte := header[0];
+	first_byte := header[0]
 
 	/**
 	* Bit 0
@@ -226,6 +254,19 @@ func extractFrame(conn net.Conn) (*WSFrame, error) {
 	return newFrame(fin, opcode, payload_size, mask, payload), nil
 }
 
+func handlePing(conn net.Conn, frame *WSFrame) {
+	f := newFrame(frame.fin, OpCodePong, frame.size, frame.mask, frame.payload)
+	conn.Write(f.ToSendableBytes())
+}
+
+func handleText(conn net.Conn, frame *WSFrame) {
+	str := string(frame.UnmaskPayload())
+	if str == "ping" {
+		f := newFrame(true, OpCodeText, 4, []byte{0, 0, 0, 0}, []byte("pong"))
+		conn.Write(f.ToSendableBytes())
+	}
+}
+
 func handleConn(conn net.Conn) {
 	defer conn.Close()
 
@@ -239,7 +280,20 @@ func handleConn(conn net.Conn) {
 			panic(err);
 		}
 
-		frame.Print()
+		frame.PrintNetwork()
+
+		switch frame.opcode {
+		case OpCodePong:
+			// No expected response
+		case OpCodePing:
+			handlePing(conn, frame)
+		case OpCodeText:
+			handleText(conn, frame)
+		case OpCodeClosed:
+		default:
+			frame.Print()
+			fmt.Printf("Unsupported opcode: %s\n", frame.opcode)
+		}
 	}
 }
 
