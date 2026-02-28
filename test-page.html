@@ -1,0 +1,15 @@
+<div id="a">a</div>
+<script>
+    const ws = new WebSocket('ws://localhost:1234');
+    ws.onopen = (e) => {
+        ws.send('ping');
+    };
+
+    ws.onmessage = (e) => {
+        window.a.innerText = e.data;
+    }
+</script>
+<button onclick="ws.send('pinging')">Ping!</button>
+
+<input type="text" id="text" />
+<button onclick="ws.send(window.text.value)">Chat</button>
