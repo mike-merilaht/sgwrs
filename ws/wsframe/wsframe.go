@@ -29,21 +29,22 @@ func ExtractFrame(conn net.Conn) (*WSFrame, error) {
 	}
 
 	first_byte := header[0]
-
+	
 	/**
 	* Bit 0
 	*/
 	fin := (first_byte & 0b10000000) != 0
-
+	
 	// Ignoring bits 1 through 3
-
+	
 	/**
 	* Bits 4 through 7 are opcode
 	*/
 	opcode := opcode.OpCode(first_byte & 0b00001111)
-
+	
 	second_byte := header[1]
-
+	fmt.Printf("%b\n", second_byte)
+	
 	/**
 	* Bit 8 is whether or not we are masked
 	*/

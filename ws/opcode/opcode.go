@@ -24,8 +24,7 @@ const (
 	OpCodeReserved15
 )
 
-func (opcode OpCode) String() string {
-    return [...]string{
+var OpCodeStrings = []string{
 		"0 (Continuation)",
 		"1 (Text)",
 		"2 (Binary)",
@@ -42,5 +41,8 @@ func (opcode OpCode) String() string {
 		"13 (RSV13)",
 		"14 (RSV14)",
 		"15 (RSV15)",
-	}[opcode]
+	};
+
+func (opcode OpCode) String() string {
+    return OpCodeStrings[opcode]
 }
