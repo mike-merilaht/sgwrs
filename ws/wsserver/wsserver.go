@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"bufio"
 	"io"
+	"strings"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/json"
 	"smwdd.io/sgwrs/logger"
 	"smwdd.io/sgwrs/ws/wsframe"
 	"smwdd.io/sgwrs/ws/opcode"
@@ -16,24 +18,9 @@ import (
 )
 
 
-const EXTENDED_16 = 126
-const EXTENDED_64 = 127
-
-
-func bytesToInt(bytes []byte) int {
-    result := 0
-    for i := 0; i < len(bytes); i++ {
-        result = result << 8
-        result += int(bytes[i])
-
-    }
-
-    return result
-}
-
-
 type WSServer struct {
 	clients []wsconnectedclient.WSConnectedClient
+	jsonHandler func(wsconnectedclient.WSConnectedClient, map[string]any)
 	mu sync.Mutex
 }
 
@@ -80,82 +67,23 @@ func (server *WSServer) handshake(conn net.Conn) {
 }
 
 func NewWSServer() *WSServer {
-	return &WSServer{clients: []wsconnectedclient.WSConnectedClient{}}
+	return &WSServer{clients: []wsconnectedclient.WSConnectedClient{}, jsonHandler: func (client wsconnectedclient.WSConnectedClient, m map[string]any) {}}
 }
 
-func (server *WSServer) extractFrame(conn net.Conn) (*wsframe.WSFrame, error) {
-	reader := bufio.NewReader(conn)
-
-	header := make([]byte, 2)
-	_, err := reader.Read(header)
-	if err != nil {
-		return nil, err
-	}
-
-	first_byte := header[0]
-
-	/**
-	* Bit 0
-	*/
-	fin := (first_byte & 0b10000000) != 0
-
-	// Ignoring bits 1 through 3
-
-	/**
-	* Bits 4 through 7 are opcode
-	*/
-	opcode := opcode.OpCode(first_byte & 0b00001111)
-
-	second_byte := header[1]
-
-	/**
-	* Bit 8 is whether or not we are masked
-	*/
-	// is_masked := (second_byte & 0b10000000) != 0
-
-	// TODO: Reject unmasked. Must close connection
-
-	/**
-	* Bit 9 through 15 are the payload length
-	*/
-	payload_size := int(second_byte & 0b01111111)
-
-	if payload_size == EXTENDED_16 {
-		// Read next 2 bytes
-		extension := make([]byte, 2)
-		_, err := reader.Read(extension)
-		if err != nil {
-			fmt.Println(err)
-			return nil, err
-		}
-		payload_size = bytesToInt(extension)
-	} else if (payload_size == EXTENDED_64) {
-		// Read next 8 bytes
-		extension := make([]byte, 8)
-		_, err := reader.Read(extension)
-		if err != nil {
-			fmt.Println(err)
-			return nil, err
-		}
-		payload_size = bytesToInt(extension)
-		panic("UNSUPPORTED PAYLOAD SIZE (64bits)")
-	}
-
-	mask := make([]byte, 4)
-	_, err = reader.Read(mask)
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-
-	payload := make([]byte, payload_size)
-	_, err = reader.Read(payload)
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-
-	return wsframe.NewWSFrame(fin, opcode, payload_size, mask, payload), nil
+func (server *WSServer) Broadcast(from wsconnectedclient.WSConnectedClient, body string) {
+	jsonbody, err := json.Marshal(map[string]string{"cmd": "chat", "body": body})
+    if err != nil {
+        // do error check
+        fmt.Println(err)
+        return
+    }
+	body_bytes := []byte(jsonbody)
+	fmt.Printf("%s\n", string(jsonbody))
+	frame := wsframe.NewWSFrame(true, opcode.OpCodeText, len(body_bytes), []byte{0, 0, 0, 0}, body_bytes)
+	payload := frame.ToSendableBytes()
+	for _, client := range server.clients {
+		client.Conn.Write(payload)
+	} 
 }
 
 func (server *WSServer) handlePing(conn net.Conn, frame *wsframe.WSFrame) {
@@ -169,6 +97,13 @@ func (server *WSServer) handleText(conn net.Conn, frame *wsframe.WSFrame) {
 		f := wsframe.NewWSFrame(true, opcode.OpCodeText, 4, []byte{0, 0, 0, 0}, []byte("pong"))
 		conn.Write(f.ToSendableBytes())
 	}
+
+	if strings.HasPrefix(str, "{") {
+		i := server.findClientIndex(conn)
+		var result map[string]any
+		json.Unmarshal([]byte(str), &result)
+		server.jsonHandler(server.clients[i], result)
+	}
 }
 
 func (server *WSServer) handleConn(conn net.Conn) {
@@ -179,7 +114,7 @@ func (server *WSServer) handleConn(conn net.Conn) {
 	server.addClient(conn)
 
 	for {
-		frame, err := server.extractFrame(conn)
+		frame, err := wsframe.ExtractFrame(conn)
 		if err == io.EOF {
 			continue;
 		} else if err != nil {
@@ -249,6 +184,10 @@ func (server *WSServer) dropClient(conn net.Conn) {
 	fmt.Printf("disconnected %s\n", client.Addr)
 	server.clients = append(server.clients[:index], server.clients[index+1:]...)
 	server.PrintConnectedClients()
+}
+
+func (server *WSServer) RegisterJsonHandler(handler func(wsconnectedclient.WSConnectedClient, map[string]any)) {
+	server.jsonHandler = handler
 }
 
 func (server *WSServer) Listen() {

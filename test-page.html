@@ -12,4 +12,4 @@
 <button onclick="ws.send('pinging')">Ping!</button>
 
 <input type="text" id="text" />
-<button onclick="ws.send(window.text.value)">Chat</button>
+<button onclick="ws.send(JSON.stringify({cmd: 'chat', body: window.text.value}))">Chat</button>
